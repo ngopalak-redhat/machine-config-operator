@@ -2,6 +2,7 @@ package e2e_bootstrap_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,6 +104,8 @@ func TestE2EBootstrap(t *testing.T) {
 		manifests        [][]byte
 		waitForMasterMCs []string
 		waitForWorkerMCs []string
+		testFailSwapOn   bool
+		testConfigDir    bool
 	}{
 		{
 			name:             "With no additional manifests",
@@ -324,6 +327,18 @@ spec:
 			waitForMasterMCs: []string{"99-master-ssh", "99-master-generated-registries", "99-master-generated-containerruntime"},
 			waitForWorkerMCs: []string{"99-worker-ssh", "99-worker-generated-registries"},
 		},
+		{
+			name:             "With failSwapOn configuration test",
+			waitForMasterMCs: []string{"99-master-ssh", "99-master-generated-registries"},
+			waitForWorkerMCs: []string{"99-worker-ssh", "99-worker-generated-registries"},
+			testFailSwapOn:   true,
+		},
+		{
+			name:             "With config-dir kubelet flag test",
+			waitForMasterMCs: []string{"99-master-ssh", "99-master-generated-registries"},
+			waitForWorkerMCs: []string{"99-worker-ssh", "99-worker-generated-registries"},
+			testConfigDir:    true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -382,14 +397,14 @@ metadata:
 			require.NoError(t, err)
 
 			// Compare the rendered configs
-			compareRenderedConfigPool(t, clientSet, destDir, "master", controllerRenderedMasterConfigName)
-			compareRenderedConfigPool(t, clientSet, destDir, "worker", controllerRenderedWorkerConfigName)
+			compareRenderedConfigPool(t, clientSet, destDir, "master", controllerRenderedMasterConfigName, tc.testFailSwapOn, tc.testConfigDir)
+			compareRenderedConfigPool(t, clientSet, destDir, "worker", controllerRenderedWorkerConfigName, tc.testFailSwapOn, tc.testConfigDir)
 
 		})
 	}
 }
 
-func compareRenderedConfigPool(t *testing.T, clientSet *framework.ClientSet, destDir, poolName, controllerRenderedConfigName string) {
+func compareRenderedConfigPool(t *testing.T, clientSet *framework.ClientSet, destDir, poolName, controllerRenderedConfigName string, testFailSwapOn bool, testConfigDir bool) {
 	paths, err := filepath.Glob(filepath.Join(destDir, "machine-configs", fmt.Sprintf("rendered-%s-*.yaml", poolName)))
 	require.NoError(t, err)
 	require.Len(t, paths, 1)
@@ -406,6 +421,14 @@ func compareRenderedConfigPool(t *testing.T, clientSet *framework.ClientSet, des
 	for _, file := range outIgn.Storage.Files {
 		require.False(t, file.Path == "/etc/kubernetes/kubelet-ca.crt")
 		require.False(t, file.Path == "/etc/kubernetes/static-pod-resources/configmaps/cloud-config/ca-bundle.pem")
+	}
+
+	if testFailSwapOn {
+		validateFailSwapOnConfig(t, outIgn, poolName)
+	}
+
+	if testConfigDir {
+		validateConfigDirConfig(t, outIgn, poolName)
 	}
 	if controllerRenderedConfigName != bootstrapRenderedConfigName {
 		t.Errorf("Expected rendered %s configurations to match: got bootstrap config %q, got controller config %q", poolName, bootstrapRenderedConfigName, controllerRenderedConfigName)
@@ -703,4 +726,97 @@ func containsGVK(objs []runtime.Object, gvk schema.GroupVersionKind) bool {
 		}
 	}
 	return false
+}
+
+func validateFailSwapOnConfig(t *testing.T, ignConfig ign3types.Config, poolName string) {
+	var kubeletConfigFile *ign3types.File
+	for i, file := range ignConfig.Storage.Files {
+		if file.Path == "/etc/kubernetes/kubelet.conf" {
+			kubeletConfigFile = &ignConfig.Storage.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, kubeletConfigFile, "kubelet.conf file not found in ignition config")
+
+	kubeletConfigContent := ""
+	if kubeletConfigFile.Contents.Source != nil {
+		source := *kubeletConfigFile.Contents.Source
+		if strings.HasPrefix(source, "data:") {
+			parts := strings.SplitN(source, ",", 2)
+			if len(parts) == 2 {
+				if strings.Contains(parts[0], "base64") {
+					decoded, err := base64.StdEncoding.DecodeString(parts[1])
+					require.NoError(t, err)
+					kubeletConfigContent = string(decoded)
+				} else {
+					kubeletConfigContent = parts[1]
+				}
+			}
+		}
+	}
+
+	require.NotEmpty(t, kubeletConfigContent, "kubelet configuration content is empty")
+
+	var kubeletConfig map[string]interface{}
+	err := yaml.Unmarshal([]byte(kubeletConfigContent), &kubeletConfig)
+	require.NoError(t, err)
+
+	failSwapOn, exists := kubeletConfig["failSwapOn"]
+	require.True(t, exists, "failSwapOn field not found in kubelet configuration")
+
+	switch poolName {
+	case "master":
+		require.True(t, failSwapOn.(bool), "failSwapOn should be true for master/control-plane nodes")
+		t.Logf("Master node has failSwapOn=true (swap disabled)")
+	case "worker":
+		require.False(t, failSwapOn.(bool), "failSwapOn should be false for worker nodes")
+		t.Logf("Worker node has failSwapOn=false (swap enabled)")
+	default:
+		t.Fatalf("Unknown pool name: %s", poolName)
+	}
+}
+
+func validateConfigDirConfig(t *testing.T, ignConfig ign3types.Config, poolName string) {
+	var kubeletConfigFile *ign3types.File
+	for i, file := range ignConfig.Storage.Files {
+		if file.Path == "/etc/kubernetes/kubelet.conf" {
+			kubeletConfigFile = &ignConfig.Storage.Files[i]
+			break
+		}
+	}
+	require.NotNil(t, kubeletConfigFile, "kubelet.conf file not found in ignition config")
+
+	kubeletConfigContent := ""
+	if kubeletConfigFile.Contents.Source != nil {
+		source := *kubeletConfigFile.Contents.Source
+		if strings.HasPrefix(source, "data:") {
+			parts := strings.SplitN(source, ",", 2)
+			if len(parts) == 2 {
+				if strings.Contains(parts[0], "base64") {
+					decoded, err := base64.StdEncoding.DecodeString(parts[1])
+					require.NoError(t, err)
+					kubeletConfigContent = string(decoded)
+				} else {
+					kubeletConfigContent = parts[1]
+				}
+			}
+		}
+	}
+
+	require.NotEmpty(t, kubeletConfigContent, "kubelet configuration content is empty")
+
+	var kubeletConfig map[string]interface{}
+	err := yaml.Unmarshal([]byte(kubeletConfigContent), &kubeletConfig)
+	require.NoError(t, err)
+
+	failSwapOn, exists := kubeletConfig["failSwapOn"]
+	require.True(t, exists, "failSwapOn field not found in kubelet configuration")
+	require.False(t, failSwapOn.(bool), "failSwapOn should be false when config-dir is used")
+
+	swapBehavior, exists := kubeletConfig["swapBehavior"]
+	if exists {
+		require.Equal(t, "LimitedSwap", swapBehavior.(string), "swapBehavior should be LimitedSwap")
+	}
+
+	t.Logf("%s pool has config-dir flag and kubelet.conf with swap settings", poolName)
 }
