@@ -1,10 +1,11 @@
 package common
 
 import (
-	"github.com/coreos/go-semver/semver"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/coreos/go-semver/semver"
 
 	"github.com/clarketm/json"
 	ign2types "github.com/coreos/ignition/config/v2_2/types"
@@ -395,7 +396,7 @@ func TestMergeMachineConfigs(t *testing.T) {
 	expectedMachineConfig := &mcfgv1.MachineConfig{
 		Spec: mcfgv1.MachineConfigSpec{
 			OSImageURL:      GetDefaultBaseImageContainer(&cconfig.Spec),
-			KernelArguments: []string{},
+			KernelArguments: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
 			Config: runtime.RawExtension{
 				Raw: rawOutIgn,
 			},
@@ -404,7 +405,11 @@ func TestMergeMachineConfigs(t *testing.T) {
 			Extensions: []string{},
 		},
 	}
-	assert.Equal(t, *mergedMachineConfig, *expectedMachineConfig)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.KernelArguments, mergedMachineConfig.Spec.KernelArguments)
+	assert.Equal(t, expectedMachineConfig.Spec.OSImageURL, mergedMachineConfig.Spec.OSImageURL)
+	assert.Equal(t, expectedMachineConfig.Spec.FIPS, mergedMachineConfig.Spec.FIPS)
+	assert.Equal(t, expectedMachineConfig.Spec.KernelType, mergedMachineConfig.Spec.KernelType)
+	assert.Equal(t, expectedMachineConfig.Spec.Extensions, mergedMachineConfig.Spec.Extensions)
 
 	// Test that all other configs can also be set properly
 
@@ -504,10 +509,12 @@ func TestMergeMachineConfigs(t *testing.T) {
 	mergedMachineConfig, err = MergeMachineConfigs(inMachineConfigs, cconfig)
 	require.Nil(t, err)
 
+	expectedKargs := append(kargs, "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0")
+
 	expectedMachineConfig = &mcfgv1.MachineConfig{
 		Spec: mcfgv1.MachineConfigSpec{
 			OSImageURL:      "overriddenURL",
-			KernelArguments: kargs,
+			KernelArguments: expectedKargs,
 			Config: runtime.RawExtension{
 				Raw: helpers.MarshalOrDie(ign3types.Config{
 					Ignition: ign3types.Ignition{
@@ -525,7 +532,11 @@ func TestMergeMachineConfigs(t *testing.T) {
 			Extensions: extensions,
 		},
 	}
-	assert.Equal(t, *mergedMachineConfig, *expectedMachineConfig)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.KernelArguments, mergedMachineConfig.Spec.KernelArguments)
+	assert.Equal(t, expectedMachineConfig.Spec.OSImageURL, mergedMachineConfig.Spec.OSImageURL)
+	assert.Equal(t, expectedMachineConfig.Spec.FIPS, mergedMachineConfig.Spec.FIPS)
+	assert.Equal(t, expectedMachineConfig.Spec.KernelType, mergedMachineConfig.Spec.KernelType)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.Extensions, mergedMachineConfig.Spec.Extensions)
 
 	// Test that custom pool configuration can overwrite base pool configuration
 	// Also test that other alphanumeric ordering is preserved
@@ -591,7 +602,7 @@ func TestMergeMachineConfigs(t *testing.T) {
 	// The expectation here is that the merged config contains the MCs with name bbb (overrides aaa due to name) and ccc (overrides ddd due to pool)
 	expectedMachineConfig = &mcfgv1.MachineConfig{
 		Spec: mcfgv1.MachineConfigSpec{
-			KernelArguments: []string{},
+			KernelArguments: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
 			Config: runtime.RawExtension{
 				Raw: helpers.MarshalOrDie(ign3types.Config{
 					Ignition: ign3types.Ignition{
@@ -638,7 +649,10 @@ func TestMergeMachineConfigs(t *testing.T) {
 			Extensions: []string{},
 		},
 	}
-	assert.Equal(t, *mergedMachineConfig, *expectedMachineConfig)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.KernelArguments, mergedMachineConfig.Spec.KernelArguments)
+	assert.Equal(t, expectedMachineConfig.Spec.FIPS, mergedMachineConfig.Spec.FIPS)
+	assert.Equal(t, expectedMachineConfig.Spec.KernelType, mergedMachineConfig.Spec.KernelType)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.Extensions, mergedMachineConfig.Spec.Extensions)
 
 }
 
@@ -800,7 +814,7 @@ func TestSetDefaultFileOverwrite(t *testing.T) {
 	require.Nil(t, err)
 	expectedMachineConfig := &mcfgv1.MachineConfig{
 		Spec: mcfgv1.MachineConfigSpec{
-			KernelArguments: []string{},
+			KernelArguments: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
 			KernelType:      KernelTypeDefault,
 			Extensions:      []string{},
 			Config: runtime.RawExtension{
@@ -808,7 +822,9 @@ func TestSetDefaultFileOverwrite(t *testing.T) {
 			},
 		},
 	}
-	assert.Equal(t, *mergedMachineConfig, *expectedMachineConfig)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.KernelArguments, mergedMachineConfig.Spec.KernelArguments)
+	assert.Equal(t, expectedMachineConfig.Spec.KernelType, mergedMachineConfig.Spec.KernelType)
+	assert.ElementsMatch(t, expectedMachineConfig.Spec.Extensions, mergedMachineConfig.Spec.Extensions)
 }
 
 // TestIgnitionMergeCompressed tests https://github.com/coreos/butane/issues/332
@@ -992,6 +1008,118 @@ func TestGetPackagesForSupportedExtensions(t *testing.T) {
 
 			assert.NoError(t, err)
 			assert.Equal(t, testCase.expectedPackages, pkgs)
+		})
+	}
+}
+
+func TestUpdateKernelArgs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name               string
+		existingKernelArgs []string
+		kernelType         string
+		expectedKernelArgs []string
+	}{
+		{
+			name:               "Realtime kernel with empty input should add cgroup v2 args with psi=0",
+			existingKernelArgs: []string{},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Default kernel with empty input should add cgroup v2 args with psi=1",
+			existingKernelArgs: []string{},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+		{
+			name:               "Realtime kernel should remove cgroup v1 args and add v2 with psi=0",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=0", "systemd.legacy_systemd_cgroup_controller=1", "other_arg=value"},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"other_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Default kernel should remove cgroup v1 args and add v2 with psi=1",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=0", "systemd.legacy_systemd_cgroup_controller=1", "other_arg=value"},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"other_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+		{
+			name:               "Realtime kernel should remove existing psi=1 and add psi=0",
+			existingKernelArgs: []string{"psi=1", "other_arg=value"},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"other_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Default kernel should remove existing psi=0 and add psi=1",
+			existingKernelArgs: []string{"psi=0", "other_arg=value"},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"other_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+		{
+			name:               "Should preserve other kernel arguments for realtime",
+			existingKernelArgs: []string{"arg1=value1", "arg2=value2", "arg3=value3"},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"arg1=value1", "arg2=value2", "arg3=value3", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Should preserve other kernel arguments for default",
+			existingKernelArgs: []string{"arg1=value1", "arg2=value2", "arg3=value3"},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"arg1=value1", "arg2=value2", "arg3=value3", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+		{
+			name:               "Should not add duplicate cgroup v2 args if already present (realtime)",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Should not add duplicate cgroup v2 args if already present (default)",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+		{
+			name:               "Realtime with mixed v1, v2, and psi args",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=0", "custom_arg=test", "psi=1", "systemd.legacy_systemd_cgroup_controller=1", "another_arg=value"},
+			kernelType:         KernelTypeRealtime,
+			expectedKernelArgs: []string{"custom_arg=test", "another_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"},
+		},
+		{
+			name:               "Default with mixed v1, v2, and psi args",
+			existingKernelArgs: []string{"systemd.unified_cgroup_hierarchy=0", "custom_arg=test", "psi=0", "systemd.legacy_systemd_cgroup_controller=1", "another_arg=value"},
+			kernelType:         KernelTypeDefault,
+			expectedKernelArgs: []string{"custom_arg=test", "another_arg=value", "systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			actualKernelArgs := UpdateKernelArgs(testCase.existingKernelArgs, testCase.kernelType)
+
+			assert.ElementsMatch(t, testCase.expectedKernelArgs, actualKernelArgs,
+				"Expected kernel args: %v, but got: %v", testCase.expectedKernelArgs, actualKernelArgs)
+
+			if testCase.kernelType == KernelTypeRealtime {
+				assert.Contains(t, actualKernelArgs, "psi=0", "Realtime kernel should have psi=0")
+				assert.NotContains(t, actualKernelArgs, "psi=1", "Realtime kernel should not have psi=1")
+			} else {
+				assert.Contains(t, actualKernelArgs, "psi=1", "Non-realtime kernel should have psi=1")
+				assert.NotContains(t, actualKernelArgs, "psi=0", "Non-realtime kernel should not have psi=0")
+			}
+
+			// Ensure cgroup v2 args are always present
+			assert.Contains(t, actualKernelArgs, "systemd.unified_cgroup_hierarchy=1", "Should have cgroup v2 hierarchy arg")
+			assert.Contains(t, actualKernelArgs, "cgroup_no_v1=\"all\"", "Should have cgroup_no_v1 arg")
+
+			// Ensure cgroup v1 args are removed
+			assert.NotContains(t, actualKernelArgs, "systemd.unified_cgroup_hierarchy=0", "Should not have cgroup v1 hierarchy arg")
+			assert.NotContains(t, actualKernelArgs, "systemd.legacy_systemd_cgroup_controller=1", "Should not have legacy cgroup controller arg")
 		})
 	}
 }

@@ -170,6 +170,10 @@ func MergeMachineConfigs(configs []*mcfgv1.MachineConfig, cconfig *mcfgv1.Contro
 		kargs = append(kargs, cfg.Spec.KernelArguments...)
 	}
 
+	// Update kernel arguments based on kernel type for PSI
+	// For realtime kernels, disable PSI; for other kernels, enable it
+	kargs = updateKernelArgs(kargs, kernelType)
+
 	extensions := []string{}
 	for _, cfg := range configs {
 		extensions = append(extensions, cfg.Spec.Extensions...)
@@ -213,6 +217,65 @@ func MergeMachineConfigs(configs []*mcfgv1.MachineConfig, cconfig *mcfgv1.Contro
 			Extensions: extensions,
 		},
 	}, nil
+}
+
+// updateKernelArgs adjusts kernel arguments based on the kernel type.
+// For realtime kernels, it ensures PSI (Pressure Stall Information) is disabled (psi=0).
+// For other kernel types, it ensures PSI is enabled (psi=1).
+func updateKernelArgs(kargs []string, kernelType string) []string {
+	klog.Infof("Adjusting kernel arguments based on kernel type: %v", kernelType)
+	klog.Infof("Input kernel arguments: %v", kargs)
+
+	adjustedKernelArgs := UpdateKernelArgs(kargs, kernelType)
+
+	klog.Infof("Output kernel arguments: %v", adjustedKernelArgs)
+	return adjustedKernelArgs
+}
+
+// UpdateKernelArgs is a shared helper that adjusts kernel arguments
+// for cgroup v2 configuration and kernel type (realtime vs default).
+// This function is used by both the render controller and kubelet-config controller.
+func UpdateKernelArgs(existingKernelArgs []string, kernelType string) []string {
+	var (
+		kernelArgsv1                                            = []string{"systemd.unified_cgroup_hierarchy=0", "systemd.legacy_systemd_cgroup_controller=1"}
+		kernelArgsv2                                            []string
+		kernelArgsToAdd, kernelArgsToRemove, adjustedKernelArgs []string
+	)
+
+	// Check if this is a realtime kernel - only disable PSI for realtime kernels
+	if kernelType == KernelTypeRealtime {
+		kernelArgsv2 = []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=0"}
+	} else {
+		// For non-RT kernels, explicitly enable PSI
+		kernelArgsv2 = []string{"systemd.unified_cgroup_hierarchy=1", "cgroup_no_v1=\"all\"", "psi=1"}
+	}
+
+	// Add cgroup v2 kernel arguments
+	kernelArgsToAdd = append(kernelArgsToAdd, kernelArgsv2...)
+	// Remove cgroup v1 kernel arguments
+	kernelArgsToRemove = append(kernelArgsToRemove, kernelArgsv1...)
+
+	// Also remove any existing psi= arguments to avoid conflicts
+	for _, arg := range existingKernelArgs {
+		if strings.HasPrefix(arg, "psi=") {
+			kernelArgsToRemove = append(kernelArgsToRemove, arg)
+		}
+	}
+
+	for _, arg := range existingKernelArgs {
+		// only append the args we want to keep, omitting the undesired
+		if !InSlice(arg, kernelArgsToRemove) {
+			adjustedKernelArgs = append(adjustedKernelArgs, arg)
+		}
+	}
+
+	for _, arg := range kernelArgsToAdd {
+		if !InSlice(arg, adjustedKernelArgs) {
+			adjustedKernelArgs = append(adjustedKernelArgs, arg)
+		}
+	}
+
+	return adjustedKernelArgs
 }
 
 // ignitionMergeSetFilesDefaultCompression sets compression of all files that has no compression to the empty string
