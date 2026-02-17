@@ -51,7 +51,7 @@ func TestKubeletConfigDefaultUpdateFreq(t *testing.T) {
 func TestKubeletConfigMaxPods(t *testing.T) {
 	autoNodeSizing := true
 
-	// kc1: AutoSizingReserved disabled - systemReservedCgroup: "", enforceNodeAllocatable: [pods]
+	// kc1: systemReservedCgroup: "", enforceNodeAllocatable: [pods]
 	kcRaw1, err := kcfg.EncodeKubeletConfig(&kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                100,
 		SystemReservedCgroup:   "",
@@ -69,7 +69,7 @@ func TestKubeletConfigMaxPods(t *testing.T) {
 		},
 	}
 
-	// kc2: AutoSizingReserved enabled - systemReservedCgroup: /system.slice, enforceNodeAllocatable: [pods, system-reserved-compressible]
+	// kc2: systemReservedCgroup: /system.slice, enforceNodeAllocatable: [pods, system-reserved-compressible]
 	kcRaw2, err := kcfg.EncodeKubeletConfig(&kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                200,
 		SystemReservedCgroup:   "/system.slice",

@@ -77,9 +77,9 @@ func TestWrapErrorWithCondition(t *testing.T) {
 	}
 }
 
-// TestGenerateKubeletIgnFilesWithReservedSystemCPUs tests that when reservedSystemCPUs is set,
+// TestReserveSystemCPUs tests that when reservedSystemCPUs is set,
 // the systemReservedCgroup is cleared and enforceNodeAllocatable is set to ["pods"] only.
-func TestGenerateKubeletIgnFilesWithReservedSystemCPUs(t *testing.T) {
+func TestReserveSystemCPUs(t *testing.T) {
 	testCases := []struct {
 		name                              string
 		reservedSystemCPUs                string
@@ -135,37 +135,31 @@ func TestGenerateKubeletIgnFilesWithReservedSystemCPUs(t *testing.T) {
 				Spec: mcfgv1.KubeletConfigSpec{},
 			}
 
-			// Execute: Generate the kubelet ignition files
 			kubeletIgnition, _, _, err := generateKubeletIgnFiles(kubeletConfig, originalKubeConfig)
 			require.NoError(t, err, "generateKubeletIgnFiles should not return an error")
 			require.NotNil(t, kubeletIgnition, "kubelet ignition file should not be nil")
 
-			// Verify: Decode the generated kubelet configuration from the ignition file
 			contents, err := ctrlcommon.DecodeIgnitionFileContents(kubeletIgnition.Contents.Source, kubeletIgnition.Contents.Compression)
 			require.NoError(t, err, "decoding ignition file contents should succeed")
 
-			// Parse the YAML contents back into a KubeletConfiguration
 			decodedConfig, err := DecodeKubeletConfig(contents)
 			require.NoError(t, err, "decoding kubelet config should succeed")
 
-			// Verify: Check that systemReservedCgroup matches expected value
 			require.Equal(t, tc.expectedSystemReservedCgroup, decodedConfig.SystemReservedCgroup,
 				"systemReservedCgroup should be %q but got %q", tc.expectedSystemReservedCgroup, decodedConfig.SystemReservedCgroup)
 
-			// Verify: Check that enforceNodeAllocatable matches expected value
 			require.Equal(t, tc.expectedEnforceNodeAllocatable, decodedConfig.EnforceNodeAllocatable,
 				"enforceNodeAllocatable should be %v but got %v", tc.expectedEnforceNodeAllocatable, decodedConfig.EnforceNodeAllocatable)
 
-			// Verify: Check that reservedSystemCPUs is preserved
 			require.Equal(t, tc.reservedSystemCPUs, decodedConfig.ReservedSystemCPUs,
 				"reservedSystemCPUs should be %q but got %q", tc.reservedSystemCPUs, decodedConfig.ReservedSystemCPUs)
 		})
 	}
 }
 
-// TestGenerateKubeletIgnFilesWithKubeletConfigSpec tests that generateKubeletIgnFiles
+// TestCGroupKubeletConfigSpec tests that generateKubeletIgnFiles
 // properly merges user-provided kubelet configuration with the original config.
-func TestGenerateKubeletIgnFilesWithKubeletConfigSpec(t *testing.T) {
+func TestCGroupKubeletConfigSpec(t *testing.T) {
 	// Setup: Create a base kubelet configuration
 	originalKubeConfig := &kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                110,
@@ -226,9 +220,9 @@ func TestGenerateKubeletIgnFilesWithKubeletConfigSpec(t *testing.T) {
 		"enforceNodeAllocatable should be [pods] when reservedSystemCPUs is set but got %v", decodedConfig.EnforceNodeAllocatable)
 }
 
-// TestGenerateKubeletIgnFilesWithEmptyStringOverride tests that when a user explicitly
+// TestEmptyStringOverride tests that when a user explicitly
 // sets systemReservedCgroup to an empty string
-func TestGenerateKubeletIgnFilesWithEmptyStringOverride(t *testing.T) {
+func TestEmptyStringOverride(t *testing.T) {
 	originalKubeConfig := &kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                110,
 		SystemReservedCgroup:   "/system.slice",
@@ -237,7 +231,7 @@ func TestGenerateKubeletIgnFilesWithEmptyStringOverride(t *testing.T) {
 
 	userKubeletConfig := &kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                100,
-		SystemReservedCgroup:   "",                                                    // User explicitly wants to clear this
+		SystemReservedCgroup:   "",                                                  // User explicitly wants to clear this
 		EnforceNodeAllocatable: []string{kubeletypes.NodeAllocatableEnforcementKey}, // User only wants pods enforcement
 	}
 
@@ -277,12 +271,12 @@ func TestGenerateKubeletIgnFilesWithEmptyStringOverride(t *testing.T) {
 		"enforceNodeAllocatable should be [pods] from user config but got %v", decodedConfig.EnforceNodeAllocatable)
 }
 
-// TestGenerateKubeletIgnFilesWithPartialUserConfig tests the bug scenario where:
+// TestPartialUserConfig tests the bug scenario where:
 // - Base config has systemReservedCgroup="/system.slice" and enforceNodeAllocatable with system-reserved-compressible
 // - User provides custom config that doesn't mention systemReservedCgroup at all (e.g., only sets maxPods)
 // - Expected: systemReservedCgroup should be preserved from base config (not cleared)
 // This prevents validation error: "systemReservedCgroup must be specified when system-reserved is in enforceNodeAllocatable"
-func TestGenerateKubeletIgnFilesWithPartialUserConfig(t *testing.T) {
+func TestPartialUserConfig(t *testing.T) {
 	originalKubeConfig := &kubeletconfigv1beta1.KubeletConfiguration{
 		MaxPods:                110,
 		SystemReservedCgroup:   "/system.slice",
